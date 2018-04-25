@@ -690,7 +690,7 @@ def plotHeatmap(obj, var, taxalevels=['Phylum', 'Genus'], order='None', SVs2plot
     #     plt.savefig(savename)
     # plt.show()
 
-#blabla
+#blablabl
 # ------------------------------------------
 # ALPHA AND BETA DIVERSITY FUNCTIONS
 
