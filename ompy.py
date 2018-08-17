@@ -8,10 +8,12 @@ import matplotlib.animation as animation
 import matplotlib.colors as colors
 import ecopy
 import pandas as pd
-import time
+import prince
 from moviepy.editor import VideoClip
 from moviepy.video.io.bindings import mplfig_to_npimage
 import seaborn as sns
+from scipy import optimize
+
 
 pd.options.mode.chained_assignment = None  # default='warn'
 
@@ -20,7 +22,7 @@ colorlist1 = ['black', 'cyan', 'blue', 'blue', 'blue', 'red', 'darkred', 'darkre
              'darkgrey', 'darkgrey', 'darkgrey', 'gold', 'orange', 'orange', 'orange', 'darkmagenta', 'magenta',
               'fuchsia', 'pink', 'Burlywood', 'green', 'chartreuse', 'Burlywood']
 
-colorlistX = ['blue', 'red', 'gold', 'magenta', 'darkgrey', 'darkorange', 'tomato', 'khaki', 'darkblue', 'brown',
+colorlistX = ['black', 'darkblue', 'darkred', 'gold', 'darkgrey', 'blue', 'red', 'orange', 'grey', 'darkblue', 'brown',
              'hotpink', 'greenyellow', 'green', 'chartreuse', 'Burlywood', 'green', 'chartreuse', 'Burlywood',
               'green', 'chartreuse', 'Burlywood', 'green', 'chartreuse', 'Burlywood']
 colorlist2 = ['darkblue', 'dodgerblue', 'crimson', 'red', 'darkgrey', 'lightgrey', 'darkorange', 'gold', 'magenta', 'pink', 'darkgreen', 'lawngreen',
@@ -42,34 +44,39 @@ markerlist = ['X', '.', 'v', 's', '*', '.', 'v', 's', '*', '.', 'v', 's', '*', '
 # Count table, SV names should be in first column, the samples with counts, then taxa starting with Kingdom or Domain
 # Return dictionary object with 'tab', 'ra', 'tax', 'seq', and 'meta'. All as pandas dataframes.
 def loadFiles(path='None', tab='None', fasta='None', meta='None', sep=','):  # Import file and convert them to suitable format
-    if path=='None' or tab=='None':
-        print('Error: No path or tab specified')
+    if path == 'None':
+        print('Error: No path specified')
         return 0
 
-    # Read count table with taxa information
-    readtab = pd.read_csv(path + tab, sep=sep, header=0, index_col=0)
+    #Prepare tab and tax
+    if tab != 'None':
+        # Read count table with taxa information
+        readtab = pd.read_csv(path + tab, sep=sep, header=0, index_col=0)
 
-    #Check if taxa information is in table
-    taxaavailable = 1
-    if 'Kingdom' in readtab.columns:
-        taxpos = readtab.columns.get_loc('Kingdom')
-    elif 'Domain' in readtab.columns:
-        taxpos = readtab.columns.get_loc('Domain')
-    else:
-        taxpos = len(readtab.columns)
-        taxaavailable = 0
+        #Check if taxa information is in table
+        taxaavailable = 1
+        if 'Kingdom' in readtab.columns:
+            taxpos = readtab.columns.get_loc('Kingdom')
+        elif 'Domain' in readtab.columns:
+            taxpos = readtab.columns.get_loc('Domain')
+        else:
+            taxpos = len(readtab.columns)
+            taxaavailable = 0
 
-    readtab.index.name = 'SV'
-    ctab = readtab.iloc[:, :taxpos]
-    ratab = 100 * ctab / ctab.sum()
+        readtab.index.name = 'SV'
+        ctab = readtab.iloc[:, :taxpos]
+        ratab = 100 * ctab / ctab.sum()
 
-    ctab = ctab.sort_index()
-    ratab = ratab.sort_index()
+        ctab = ctab.sort_index()
+        ratab = ratab.sort_index()
 
-
-    if taxaavailable == 1:
-        taxtab = readtab.iloc[:, taxpos:]
-        taxtab = taxtab.sort_index()
+        # Prepare taxa dataframe
+        if taxaavailable == 1:
+            taxtab = readtab.iloc[:, taxpos:]
+            taxtab = taxtab.sort_index()
+            for name in taxtab.columns.tolist()[:-1]: #Remove items containing unknowns
+                taxtab[name][taxtab[name].str.contains('nknown', na=False)] = np.nan
+                taxtab[name][taxtab[name].str.contains('uncult', na=False)] = np.nan
 
     # Read fasta file with SV sequences
     if fasta != 'None':
@@ -88,37 +95,40 @@ def loadFiles(path='None', tab='None', fasta='None', meta='None', sep=','):  # I
             else:
                 seq = seq + readfasta[i].strip()
         # Correct fasta list based on SVs actually in count table (some might not be represented)
-        tabSVs = list(ctab.index)
-        corrfastalist = []
-        for i in range(len(fastalist)):
-            if fastalist[i][0] in tabSVs:
-                corrfastalist.append(fastalist[i])
-        seqtab = pd.DataFrame(corrfastalist, columns=['SV', 'seq'])
+        if tab != 'None':
+            tabSVs = list(ctab.index)
+            corrfastalist = []
+            for i in range(len(fastalist)):
+                if fastalist[i][0] in tabSVs:
+                    corrfastalist.append(fastalist[i])
+            seqtab = pd.DataFrame(corrfastalist, columns=['SV', 'seq'])
+        else:
+            seqtab = pd.DataFrame(fastalist, columns=['SV', 'seq'])
+
         seqtab = seqtab.set_index('SV')
         seqtab = seqtab.sort_index()
 
     # Read meta data
     if meta != 'None':
         readmeta = pd.read_csv(path + meta, sep=sep, header=0, index_col=0)
+    # Go through metadata and remove lines not in tab
+    if meta != 'None' and tab != 'None':
+        for ix in readmeta.index:
+            if ix not in ctab.columns:
+                readmeta = readmeta.drop([ix])
 
     # Return dictionary object with all dataframes
     out = {}
-    out['tab'] = ctab
-    out['ra'] = ratab
-    if taxaavailable == 1:
+    if tab != 'None':
+        out['tab'] = ctab
+        out['ra'] = ratab
+    if tab != 'None' and taxaavailable == 1:
         out['tax'] = taxtab
-    else:
-        print('No taxa found')
     if fasta != 'None':
         out['seq'] = seqtab
-    else:
-        print('No fasta file found')
     if meta != 'None':
         out['meta'] = readmeta
-    else:
-        print('No metadata found')
     return out
-
 
 # Function the takes dictionary object with tab, tax, meta, and seq
 # and saves count_tax, meta, and seq fasta files as output to the desired path folder
@@ -153,7 +163,6 @@ def returnFiles(obj, path, sep=','):  # Saves files in the same format as they w
         print('No seq')
     print('Files saved')
 
-
 # Function that prints some stats on the data
 def getStats(obj):
     tab = obj['tab']
@@ -164,6 +173,104 @@ def getStats(obj):
     print('Titles and first line in meta data')
     print(list(obj['meta'].columns))
     print(list(obj['meta'].iloc[1, :]))
+
+# Function that makes sure different objects have the same SV names
+def calibrateSVs(objlist):
+    #Give all SVs new names, associate sequence with name
+    svlist = []
+    for i in range(len(objlist)):
+        svlist = svlist + objlist[i]['seq']['seq'].tolist()
+    svlist = list(set(svlist))
+    svdict = {}; counter = 0
+    for sv in svlist:
+        counter += 1
+        svdict[sv] = 'SV'+str(counter)
+
+    #Change the name of all SVs
+    for i in range(len(objlist)):
+        seq = objlist[i]['seq']
+        seq['newSV'] = np.nan
+        if 'tab' in objlist[i].keys():
+            tab = objlist[i]['tab']
+            ra = objlist[i]['ra']
+            tab['newSV'] = np.nan
+            ra['newSV'] = np.nan
+        if 'tax' in objlist[i].keys():
+            tax = objlist[i]['tax']
+            tax['newSV'] = np.nan
+
+        for n in seq.index:
+            newSVname = svdict[seq.loc[n, 'seq']]
+            seq.loc[n, 'newSV'] = newSVname
+            if 'tab' in objlist[i].keys():
+                tab.loc[n, 'newSV'] = newSVname
+                ra.loc[n, 'newSV'] = newSVname
+            if 'tax' in objlist[i].keys():
+                tax.loc[n, 'newSV'] = newSVname
+
+        seq = seq.set_index('newSV')
+        if 'tab' in objlist[i].keys():
+            tab = tab.set_index('newSV')
+            ra = ra.set_index('newSV')
+        if 'tax' in objlist[i].keys():
+            tax = tax.set_index('newSV')
+
+        objlist[i]['seq'] = seq
+        if 'tab' in objlist[i].keys():
+            objlist[i]['tab'] = tab
+            objlist[i]['ra'] = ra
+        if 'tax' in objlist[i].keys():
+            objlist[i]['tax'] = tax
+    return objlist
+
+# Function that merges different objects
+def combineObjects(objlist):
+    calibratedObjects = calibrateSVs(objlist)
+
+    #Change sample names to include an index indicating object
+    for i in range(len(calibratedObjects)):
+        colnames = calibratedObjects[i]['tab'].columns.tolist()
+        newcolnames = []
+        for n in colnames:
+            newcolnames.append('Obj'+str(i)+'_'+n)
+        calibratedObjects[i]['tab'].columns = newcolnames
+        calibratedObjects[i]['ra'].columns = newcolnames
+
+        rownames = calibratedObjects[i]['meta'].index.tolist()
+        newrownames = []
+        for n in rownames:
+            newrownames.append('Obj'+str(i)+'_'+n)
+        calibratedObjects[i]['meta']['newindex'] = newrownames
+        calibratedObjects[i]['meta'] = calibratedObjects[i]['meta'].set_index('newindex')
+
+    #Merge all dataframes
+    joined_object = calibratedObjects[0].copy()
+    for i in range(1, len(calibratedObjects)):
+        tab0 = joined_object['tab']
+        tab1 = calibratedObjects[i]['tab']
+        joined_object['tab'] = tab0.join(tab1, how='outer').fillna(0)
+
+        ra0 = joined_object['ra']
+        ra1 = calibratedObjects[i]['ra']
+        joined_object['ra'] = ra0.join(ra1, how='outer').fillna(0)
+
+        SV0list = joined_object['seq'].index.tolist()
+        SV1list = calibratedObjects[i]['seq'].index.tolist()
+        addto0 = [x for x in SV1list if x not in SV0list]
+        joined_object['seq'] = pd.concat([joined_object['seq'], calibratedObjects[i]['seq'].loc[addto0, :]], join='outer')
+
+        if 'tax' in calibratedObjects[i].keys():
+            tx0list = joined_object['tax'].index.tolist()
+            tx1list = calibratedObjects[i]['tax'].index.tolist()
+            addto0 = [x for x in tx1list if x not in tx0list]
+            joined_object['tax'] = pd.concat([joined_object['tax'], calibratedObjects[i]['tax'].loc[addto0, :]], join='outer')
+
+        meta0 = joined_object['meta']
+        meta1 = calibratedObjects[i]['meta']
+        joined_object['meta'] = pd.concat([meta0, meta1], join='outer')
+
+    joined_object['tab'] = joined_object['tab'].applymap(int)
+    return joined_object
 
 
 # ----------------------------
@@ -222,6 +329,32 @@ def subsetSVs(obj, svlist):
     if 'ra' in obj:
         ra = obj['ra']
         ra = ra.loc[svlist, :]
+        out['ra'] = ra
+    if 'tax' in obj:
+        tax = obj['tax']
+        tax = tax.loc[svlist, :]
+        out['tax'] = tax
+    if 'seq' in obj:
+        seq = obj['seq']
+        seq = seq.loc[svlist, :]
+        out['seq'] = seq
+    if 'meta' in obj:
+        out['meta'] = obj['meta']
+    return out
+
+# Funtion that subset dataframes based on a certain number of the most abundant SVs
+def subsetTopSVs(obj, number=25):
+    out = {}
+    tab = obj['tab']
+    ra = tab/tab.sum()
+    ra['sum'] = ra.sum(axis=1)
+    ra = ra.sort_values(by='sum', ascending=False)
+    svlist = ra.index[:number]
+    tab2 = tab.loc[svlist, :]
+    out['tab'] = tab2
+    if 'ra' in obj:
+        ra2 = obj['ra']
+        ra2 = ra2.loc[svlist, :]
         out['ra'] = ra
     if 'tax' in obj:
         tax = obj['tax']
@@ -307,7 +440,6 @@ def removeLowReads(obj, cutoff=1):
         out['meta'] = obj['meta']
     return out
 
-
 # Function that subsets SVs based on the fraction of samples in which they are observed
 # Cutoff is in % of samples
 # If abund=True the most abundant SVs are kept, otherwise the rare ones are kept
@@ -341,12 +473,39 @@ def subsetFreq(obj, cutoff=50, abund=True):
         out['meta'] = obj['meta']
     return out
 
+# Subset obj based on text in taxa
+def subsetTextPatterns(obj, subsetLevels=[], subsetPatterns=[]):
+    if len(subsetLevels) == 0 or len(subsetPatterns) == 0:
+        print('No taxlevels or pattern')
+        return 0
+    else:
+        taxPatternCheck = obj['tax'].applymap(str)
+        keepIX = []
+        for col in subsetLevels:
+            for ix in taxPatternCheck.index:
+                for ptrn in subsetPatterns:
+                    if ptrn in taxPatternCheck.loc[ix, col] and ix not in keepIX:
+                        keepIX.append(ix)
+    out = {}
+    if 'tab' in obj.keys():
+        out['tab'] = obj['tab'].loc[keepIX]
+    if 'ra' in obj.keys():
+        out['ra'] = obj['ra'].loc[keepIX]
+    if 'tax' in obj.keys():
+        out['tax'] = obj['tax'].loc[keepIX]
+    if 'seq' in obj.keys():
+        out['seq'] = obj['seq'].loc[keepIX]
+    if 'meta' in obj.keys():
+        out['meta'] = obj['meta']
+    return out
 
 # Merges samples based on variable and list from meta data
-def mergeSamples(obj, var, slist, keep0=False):
+def mergeSamples(obj, var='None', slist='None', keep0=False):
     if 'meta' not in obj.keys():
         print('Metadata missing')
         return 0
+    if var != 'None' and slist == 'None':
+        slist = obj['meta'][var]
 
     tabdi = {}
     radi = {}  # Temp dict that holds sum for each type in slist
@@ -391,77 +550,40 @@ def mergeSamples(obj, var, slist, keep0=False):
     out['meta'] = meta2
     return out
 
-
-# Table with counts rarefied based on counts or cutoff percentage
-# If method=rabund --> for each sample, check if SV rel abund is > cutoff%, if not - set to 0
-# If method=round --> First round, then add or subtract counts if total counts in a sample is not equal to depth
-# If method=random --> Randomly pick depth counts of present SVs. Chance of being picked is proportional to number of counts.
-def rarefy(tab, method='round', depth='min', cutoff=0.1):
+# Table with rarefied counts based on calculation, similar to rarafaction without replacement
+def rarefy1(tab, depth='min'):
     tab = tab.applymap(int) #Make sure table elements are integers
     if depth == 'min':  # Define read depth
         reads = min(tab.sum())
     else:
         reads = depth
 
-    if method == 'round':
-        samples = tab.columns.tolist()
-        svs = tab.index.tolist()
-        rtab = tab.copy()
-        for smp in samples:
-            smpsum = sum(tab[smp])
-            if smpsum < reads:  # Remove sample if sum of reads less than read depth
-                rtab = rtab.drop(smp, axis=1)
-                continue
-            frac = tab.loc[:, smp] * reads / smpsum
-            avrundad = frac.apply(round)
-            diffs = frac - avrundad  # Round calculatad read numbers
-            if sum(avrundad) < reads:  # Correct if too few
-                addNR = int(reads - sum(avrundad))
-                diffs = diffs[diffs > 0]
-                addSV = random.sample(list(diffs.index), addNR)
-                avrundad[addSV] = avrundad[addSV] + 1
-                rtab[smp] = avrundad
-            elif sum(avrundad) > reads:  # Correct if too many
-                addNR = int(sum(avrundad) - reads)
-                diffs = diffs[diffs < 0]
-                addSV = random.sample(list(diffs.index), addNR)
-                avrundad[addSV] = avrundad[addSV] - 1
-                rtab[smp] = avrundad
-            else:
-                rtab[smp] = avrundad
-        return rtab
+    samples = tab.columns.tolist()
+    svs = tab.index.tolist()
+    rtab = tab.copy()
+    for smp in samples:
+        smpsum = sum(tab[smp])
+        if smpsum < reads:  # Remove sample if sum of reads less than read depth
+            rtab = rtab.drop(smp, axis=1)
+            continue
 
-    elif method == 'random':
-        rftab = pd.DataFrame(0, index=tab.index, columns=tab.columns)
-        for smp in tab.columns:
-            if tab[smp].sum() < reads:
-                rftab = rftab.drop([smp], axis=1)
-                #print(smp, ' dropped during rarefy')
-                continue
-            else:
-                temparr = tab[smp][tab[smp] > 0]
-                longlist = []
-                for sv in temparr.index:
-                    longlist = longlist + [sv] * int(temparr[sv])
-                randsample = random.sample(longlist, reads)
-                uniquelist = np.unique(randsample, return_counts=True)
-                rftab.loc[uniquelist[0], smp] = uniquelist[1]
-        return rftab
+        frac = tab.loc[:, smp] * reads / smpsum #Calculate rel abund
+        avrundad = frac.apply(math.floor) #Round down
+        addNR = int(reads - sum(avrundad)) #This many reads must be added
 
-    elif method == 'rabund':
-        rtab = tab.copy()
-        for smp in tab.columns:
-            ra = 100 * rtab[smp] / rtab[smp].sum()
-            rtab[smp][ra < cutoff] = 0
-        return rtab
+        if addNR >= 1:
+            diffs = frac - avrundad
+            addSV = tab[smp].sample(n=addNR, replace=False, weights=diffs).index.tolist()
+            avrundad[addSV] = avrundad[addSV] + 1
+        rtab[smp] = avrundad
+    return rtab
 
-    else:
-        print('Error in Rarefy input')
-
-# Table with rarefied counts, this method is much faster than rarefy with random method above
-# Randomly pick depth counts of present SVs. Chance of being picked is proportional to number of counts (i.e. with replacement).
-def rarefy2(tab, depth='min', seed=0):
-    prng = np.random.RandomState(seed) # reproducible results
+# Table with rarefied counts, Randomly pick depth counts of present SVs.
+# Chance of being picked is proportional to number of counts (i.e. with replacement).
+def rarefy2(tab, depth='min', seed='None'):
+    tab = tab.fillna(0)
+    if seed != 'None':
+        prng = np.random.RandomState(seed) # reproducible results
     noccur = tab.sum()
     nvar = len(tab.index) # number of SVs
 
@@ -473,44 +595,16 @@ def rarefy2(tab, depth='min', seed=0):
 
     rftab = tab.copy()
     for s in tab.columns: # for each sample
-        if tab[s].sum()<depth:
+        if tab[s].sum() < depth:
             rftab = rftab.drop(s, axis=1)
             continue
         else:
             p = tab[s]/tab[s].sum()
-            choice = prng.choice(nvar, depth, p=p)
+            if seed != 'None':
+                choice = prng.choice(nvar, depth, p=p)
+            else:
+                choice = np.random.choice(nvar, depth, p=p)
             rftab[s] = np.bincount(choice, minlength=nvar)
-    return rftab
-
-# Table with rarefied counts, this method is much faster than rarefy with random method above
-# Randomly pick depth counts of present SVs. This one is without replacement.
-def rarefy3(tab, depth='min', seed=42):
-    steps = 20
-    prng = np.random.RandomState(seed)  # reproducible results
-    noccur = tab.sum()
-    nvar = len(tab.index)  # number of SVs
-
-    ## Set read depth
-    if depth == 'min':
-        depth = int(np.min(noccur))
-    else:
-        depth = int(depth)
-
-    rftab = tab.copy()
-    for s in tab.columns:  # for each sample
-        valuelist = tab[s]
-        if valuelist.sum() < depth:
-            rftab = rftab.drop(s, axis=1)
-            continue
-        else:
-            rftab[s] = 0
-            for i in range(steps):
-                p = valuelist / valuelist.sum()
-                choice = prng.choice(nvar, int(depth/steps), p=p)
-                binned_choice = np.bincount(choice, minlength=nvar)
-                rftab[s] = rftab[s] + binned_choice
-                valuelist = valuelist - binned_choice
-                valuelist[valuelist<0] = 0
     return rftab
 
 # Group samples in a results series based on meta variable
@@ -527,110 +621,88 @@ def sampleSeriesAverages(ser, meta, var, slist):
 # FUNCTIONS FOR VISUALISING TAXA IN HEATMAP
 
 # Group SVs based on taxa
-# Returns only tab and ra
-def groupbyTaxa(obj, level='Genus', extra='none'):
+def groupbyTaxa(obj, levels=['Phylum', 'Genus'], nameType='SV'):
     # Clean up tax data frame
     tax = obj['tax']
     tax = tax.fillna(0)
+    taxSV = tax.copy() #df to hold nameTypes in undefined
+    taxNames = tax.copy() #df to hold lowest known taxaname in undefined
 
-    # Get index of levels and extra
-    taxanameslist = tax.columns.tolist() #List with Kingdom, Phylum etc.
-    levelix = taxanameslist.index(level)
-    extraix = taxanameslist.index(extra)
+    # Check which OTU or SV name is used in the index
+    indexlist = tax.index.tolist()
+    if indexlist[0][:3] in ['Otu', 'OTU', 'ASV', 'ESV']:
+        currentname = indexlist[0][:3]
+        startpos = 3
+    elif indexlist[0][:2] in ['SV']:
+        currentname = indexlist[0][:2]
+        startpos = 2
+    else:
+        print('Error in groupbyTaxa, SV/OTU name not known')
+        return 0
 
-    # Change Otu into SV
-    indexlist = list(tax.index)
-    if indexlist[0][:3] == 'Otu': #Check if Otu are used in index
+    # If incorrect name is in tax, make column with correct name
+    if nameType != currentname:
         newnames = []
         for i in range(len(indexlist)):
-            newnames.append('SV' + indexlist[i][3:])
+            newnames.append(nameType+indexlist[i][startpos:])
         indexlist = newnames
 
-    # Put the SV name in all empty spots in dataframe called taxSV
-    taxSV = tax.copy()
-    for s in range(len(taxSV.columns)):
-        for i in range(len(taxSV.index)):
-            if taxSV.iloc[i, s] == 0:
-                taxSV.iloc[i, s] = indexlist[i]
-    # Change all 0 in tax to lowest determined taxa level
-    taxNames = tax.copy()
+    # Put the SV/OTU name in all empty spots in taxSV
+    for col in range(len(taxSV.columns)):
+        for row in range(len(taxSV.index)):
+            if taxSV.iloc[row, col] == 0:
+                taxSV.iloc[row, col] = indexlist[row]
+    taxSV[nameType] = indexlist
+
+    # Change all 0 in tax to lowest determined taxa level in taxNames
+    taxanameslist = taxNames.columns.tolist() #List with Kingdom, Phylum .. SV
     for s_nr in range(1, len(taxanameslist)):
-        s1 = taxanameslist[s_nr]; s0 = taxanameslist[s_nr-1]
+        s0 = taxanameslist[s_nr-1]
+        s1 = taxanameslist[s_nr]
         taxNames[s1][tax[s1] == 0] = taxNames[s0][tax[s1] == 0]
 
     # Create names to use in output
-    if extra in tax.columns and level in tax.columns:
-        taxSV['Name'] = taxSV[extra] + '; ' + taxSV[level]
-        for i in range(len(tax.index)): #Go through names and check so none is SV-SV
-            if tax[extra].iloc[i] == 0:
-                taxSV['Name'].iloc[i] = str(taxNames[extra].iloc[i])+'; '+ str(taxSV[level].iloc[i])
-    elif level in tax.columns:
-        taxSV['Name'] = taxSV[level]
-        for i in range(len(tax.index)): #Go through names and check so none is only SV
-            if tax[level].iloc[i] == 0:
-                taxSV['Name'].iloc[i] = taxNames[level].iloc[i]+'; '+taxSV[level].iloc[i]
+    if len(levels) == 1:
+        tax['Name'] = taxSV[levels[0]]
+        for ix in tax.index:
+            if tax.loc[ix, levels[0]] == 0:
+                tax.loc[ix, 'Name'] = taxNames.loc[ix, levels[0]] + '; ' + tax.loc[ix, 'Name']
+    elif len(levels) == 2:
+        tax['Name'] = taxNames[levels[0]]+'; '+taxSV[levels[1]]
     else:
-        print('Error in GroupbyTaxa, level is not in tax table')
+        print('Error in GroupbyTaxa, levels should be a list with 1 or 2 items')
         return 0
 
-    tab = obj['tab']
-    tab['Name'] = list(taxSV['Name'])
-    ra = obj['ra']
-    ra['Name'] = list(taxSV['Name'])
-
-    tab = tab.set_index(['Name'])
-    ra = ra.set_index('Name')
-    tab = tab.groupby(tab.index).sum()
-    ra = ra.groupby(ra.index).sum()
-
+    #Grouby Name and return object
     out = {}
-    out['tab'] = tab
-    out['ra'] = ra
+    if 'tab' in obj.keys():
+        tab = obj['tab']
+        tab['Name'] = tax['Name']
+        tab = tab.set_index(['Name'])
+        tab = tab.groupby(tab.index).sum()
+        out['tab'] = tab
+    if 'ra' in obj.keys():
+        ra = obj['ra']
+        ra['Name'] = tax['Name']
+        ra = ra.set_index('Name')
+        ra = ra.groupby(ra.index).sum()
+        out['ra'] = ra
+    if 'meta' in obj.keys():
+        out['meta'] = obj['meta']
     return out
 
-
-# Returns a dataframe with rounded relative abundance values for heatmap
-def heatmapRAdataLabels(ra):
-    for r in ra.index:
-        for c in ra.columns:
-            value = float(ra.loc[r, c])
-            if value < 0.1 and value > 0:
-                ra.loc[r, c] = -0.1
-            elif value < 10 and value >= 0.1:
-                ra.loc[r, c] = round(value, 1)
-            elif value > 99:
-                ra.loc[r, c] = int(99)
-            elif value >= 10:
-                ra.loc[r, c] = round(value)
-            else:
-                ra.loc[r, c] = 0
-    return ra
-
-
-# For each sample retain top number SVs
-def listTopSVs(obj, number=20):
-    tab = obj['tab'].copy()
-    ra = obj['ra'].copy()
-    cols = tab.columns.tolist()
-    retain = []
-    # This goes through the samples and picks out the top SVs in each sample
-    for c in cols:
-        tab = tab.sort_values(by=[c], ascending=False)
-        svs = tab.index.tolist()[:number]
-        retain = retain + svs
-    # This identifies top number SVs based on max RA in a sample
-    ra['max'] = ra.max(axis=1)
-    ra = ra.sort_values(by=['max'], ascending=False)
-    svs = ra.index.tolist()[:number]
-    retain = retain + svs
-    # Get the uniqe SVs in retain and return as list
-    retain = set(retain)
-    return list(retain)
-
 # Plots heatmap, order is the heading in metadata for the column that specifies logical order of samples
-def plotHeatmap(obj, var, taxalevels=['Phylum', 'Genus'], order='None', SVs2plot=20, savename='None'):
+def plotHeatmap(obj, var='None', levels=['Phylum', 'Genus'], subsetLevels='None', subsetPatterns='None',
+                order='None', numberToPlot=20, method='max_sample', nameType='SV', labels=True, labelSize=1, fontSize=15, saveName='None'):
     #Merge samples based on var
-    merged_obj = mergeSamples(obj, var=var, slist=obj['meta'].loc[:, var])
+    if var != 'None':
+        merged_obj = mergeSamples(obj, var=var)
+    else:
+        merged_obj = obj.copy()
+
+    #Calculate relative abundances and store in df ra
+    tab = merged_obj['tab']
+    ra = 100*tab/tab.sum()
 
     ## Make sure samples are in the right order in meta data
     if order != 'None':
@@ -638,59 +710,108 @@ def plotHeatmap(obj, var, taxalevels=['Phylum', 'Genus'], order='None', SVs2plot
         md[order] = md[order].astype(float)
         md = md.sort_values(by=order)
         logiclist = []
-        [logiclist.append(item) for item in md[var] if item not in logiclist]
+        if var != 'None':
+            [logiclist.append(item) for item in md[var] if item not in logiclist]
+        else:
+            [logiclist.append(item) for item in md.index if item not in logiclist]
         merged_obj['meta'] = md
 
+    ## Subset based on pattern
+    if subsetLevels != 'None' and isinstance(subsetLevels, list) and isinstance(subsetPatterns, list):
+        subset_obj = subsetTextPatterns(merged_obj, subsetLevels, subsetPatterns)
+        ra = subset_obj['ra']
+
     ## Groupby taxa
-    taxa_obj = groupbyTaxa(merged_obj, level=taxalevels[1], extra=taxalevels[0])
+    obj_to_group = {}
+    obj_to_group['ra'] = ra; obj_to_group['tax'] = merged_obj['tax']
+    taxa_obj = groupbyTaxa(obj_to_group, levels=levels, nameType=nameType)
+    ra = taxa_obj['ra']; table = ra.copy()
 
     # Subset for top taxa
-    topSVs = listTopSVs(taxa_obj, number=SVs2plot)
-    retained = subsetSVs(taxa_obj, topSVs)
+    if method == 'max_sample':
+        ra['max'] = ra.max(axis=1)
+        ra = ra.sort_values(by=['max'], ascending=False)
+        retain = ra.index.tolist()[:numberToPlot]
 
-    # Print heatmap
-    table = retained['ra']
+    elif method == 'mean_all':
+        ra['mean'] = ra.mean(axis=1)
+        ra = ra.sort_values(by=['mean'], ascending=False)
+        retain = ra.index.tolist()[:numberToPlot]
+
+    elif method == 'max_sample_all':
+        retain = []
+        for c in cols:
+            ra = ra.sort_values(by=[c], ascending=False)
+            svs = ra.index.tolist()[:number]
+            retain = retain + svs
+        retain = list(set(retain))
+
+    table = table.loc[retain]
+
     if order != 'None':
         table = table.loc[:, logiclist]
 
-    table['max'] = table.max(axis=1)
-    table = table.sort_values(by=['max'], ascending=False)
-    table = table.iloc[:SVs2plot, :]
-    table = table.drop(['max'], axis=1)
+    # Change to italics in table labels
+    taxa_list = table.index.tolist()
+    new_taxa_list = []
+    for n in taxa_list:
+        if ';' in n: #Check if there are two taxa names
+            splitname = n.split(';')
+            splitname1 = splitname[0].split('__')
+            newname1 = splitname1[0]+'__'+'$\it{'+splitname1[1]+'}$'
+            if '__' in splitname[1]:
+                splitname2 = splitname[1].split('__')
+                newname2 = splitname2[0]+'__'+'$\it{'+splitname2[1]+'}$'
+            else:
+                newname2 = splitname[1]
+            newname = newname1+';'+newname2
+        else: #If there is only one taxa name
+            if '__' in n:
+                splitname = n.split('__')
+                newname = splitname[0]+'__'+'$\it{'+splitname[1]+'}$'
+            else:
+                newname = n
+        new_taxa_list.append(newname)
+    table = pd.DataFrame(table.values, index=new_taxa_list, columns=table.columns)
 
+    # Print heatmap
     table['avg'] = table.mean(axis=1)
     table = table.sort_values(by=['avg'], ascending=True)
     table = table.drop(['avg'], axis=1)
 
     #Fix datalabels
-    datalab = heatmapRAdataLabels(table)
+    if labels:
+        labelvalues = table.copy()
+        for r in table.index:
+            for c in table.columns:
+                value = float(table.loc[r, c])
+                if value < 0.1 and value > 0:
+                    labelvalues.loc[r, c] = -0.1
+                elif value < 10 and value >= 0.1:
+                    labelvalues.loc[r, c] = round(value, 1)
+                elif value > 99:
+                    labelvalues.loc[r, c] = int(99)
+                elif value >= 10:
+                    labelvalues.loc[r, c] = round(value)
+                else:
+                    labelvalues.loc[r, c] = 0
 
     #Plot
     fig, ax = plt.subplots(figsize=(14, 10))
-    sns.set(font_scale=1.2)
-    sns.heatmap(table, annot=datalab, cmap='Reds', linewidths=0.5, robust=True, cbar=False, ax=ax)
+    sns.set(font_scale=labelSize)
+    if labels:
+        sns.heatmap(table, annot=labelvalues, cmap='Reds', linewidths=0.5, robust=True, cbar=False, ax=ax)
+    else:
+        sns.heatmap(table, cmap='Reds', linewidths=0.5, robust=True, cbar=False, ax=ax)
     plt.xticks(rotation=90)
-    plt.setp(ax.get_xticklabels(), fontsize=16)
+    plt.setp(ax.get_xticklabels(), fontsize=fontSize)
     ax.set_ylabel('')
-    plt.setp(ax.get_yticklabels(), fontsize=16)
+    plt.setp(ax.get_yticklabels(), fontsize=fontSize)
     plt.tight_layout()
-    if savename != 'None':
-        plt.savefig(savename)
+    if saveName != 'None':
+        plt.savefig(saveName)
     plt.show()
 
-
-    # plt.figure(figsize=(14, 10))
-    # sns.set(font_scale=1.1)
-    # sns.heatmap(table, annot=datalab, cmap='Reds', linewidths=0.5, robust=True, cbar=False, ax=ax)
-    # plt.xticks(rotation=90)
-    # plt.ylabel('')
-    # plt.setp(ax.get_yticklabels(), fontsize=14)
-    # plt.tight_layout()
-    # if savename != 'None':
-    #     plt.savefig(savename)
-    # plt.show()
-
-#blablabl
 # ------------------------------------------
 # ALPHA AND BETA DIVERSITY FUNCTIONS
 
@@ -1059,13 +1180,13 @@ def bMNTD(tab, distmat):
 
 
 # Plots PCoA for distance matrix
-def plotPCoA(dist, meta, var1='None', var2='None', order='None', title='', savename='None'):
+def plotPCoA(dist, meta, var1='None', var2='None', tag='None', order='None', title='', colorlist=colorlistX, markerlist=markerlist, savename='None'):
     # Do the PCoA in ecopy and get results for PC1 and PC2 into dataframe
-    pcs = ecopy.pcoa(dist)
+    pcs = ecopy.pcoa(dist, correction='1')
     pc_values = ecopy.pcoa.summary(pcs)
-    pc1_perc = round(100 * pc_values.iloc[1, 0], 1);
+    pc1_perc = round(100 * pc_values.iloc[1, 0], 1)
     xn = 'PC1 (' + str(pc1_perc) + '%)'
-    pc2_perc = round(100 * pc_values.iloc[1, 1], 1);
+    pc2_perc = round(100 * pc_values.iloc[1, 1], 1)
     yn = 'PC2 (' + str(pc2_perc) + '%)'
 
     koord = pcs.biplot(coords=True)['Objects']
@@ -1075,22 +1196,23 @@ def plotPCoA(dist, meta, var1='None', var2='None', order='None', title='', saven
     # Combine pcoa results with meta data
     meta[xn] = pcoadf[xn]
     meta[yn] = pcoadf[yn]
-    meta = meta[meta[xn].notnull()]
+    metaPlot = meta[meta[xn].notnull()]
     if order != 'None':
         meta = meta.sort_values(by=[order])
 
     if var1 == 'None' and var2 == 'None':
         return 'Error, no variables in input'
-    if var1 != 'None':
+    if var1 != 'None': #List of names used for different colors in legend
         smpcats1 = []
         [smpcats1.append(item) for item in meta[var1] if item not in smpcats1]
-    if var2 != 'None':
+    if var2 != 'None': #List of names used for different marker types in legend
         smpcats2 = []
         [smpcats2.append(item) for item in meta[var2] if item not in smpcats2]
+    if tag != 'None': #List of labels placed next to points
+        tagcats = []
+        [tagcats.append(item) for item in meta[tag] if item not in tagcats]
 
     # Do the plotting
-    metaPlot = meta.loc[:, [xn,yn, var1, var2]]
-
     plt.rcParams.update({'font.size': 18})
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -1099,10 +1221,10 @@ def plotPCoA(dist, meta, var1='None', var2='None', order='None', title='', saven
     shapeTracker = []
 
     for i in range(len(smpcats1)):
-        metaPlot_i = metaPlot[metaPlot[var1] == smpcats1[i]]
+        metaPlot_i = metaPlot[metaPlot[var1] == smpcats1[i]] #Subset metaPlot based on var1 in smpcats1
 
         if var2 != 'None':
-            linesColor[0].append(ax.scatter([], [], label=str(smpcats1[i]), color=colorlist1[i]))
+            linesColor[0].append(ax.scatter([], [], label=str(smpcats1[i]), color=colorlist[i]))
             linesColor[1].append(smpcats1[i])
 
             jcounter = 0
@@ -1111,7 +1233,7 @@ def plotPCoA(dist, meta, var1='None', var2='None', order='None', title='', saven
                     metaPlot_ij = metaPlot_i[metaPlot_i[var2]==smpcats2[j]]
                     xlist = metaPlot_ij[xn]
                     ylist = metaPlot_ij[yn]
-                    ax.scatter(xlist, ylist, label=None, color=colorlist1[i], marker=markerlist[jcounter], s=70)
+                    ax.scatter(xlist, ylist, label=None, color=colorlist[i], marker=markerlist[jcounter], s=70)
 
                     if jcounter not in shapeTracker:
                         linesShape[0].append(ax.scatter([], [], label=str(smpcats2[j]), color='black', marker=markerlist[jcounter]))
@@ -1119,29 +1241,123 @@ def plotPCoA(dist, meta, var1='None', var2='None', order='None', title='', saven
                         shapeTracker.append(jcounter)
                 jcounter += 1
 
-            ax.legend(linesColor[0], linesColor[1], ncol=1, bbox_to_anchor=(0.95, 1.0), title='Enrichment', frameon=False)
+            # Here set both legends for color and marker
+            ax.legend(linesColor[0], linesColor[1], ncol=1, bbox_to_anchor=(1.3, 1), title='Time', frameon=False, markerscale=1.5, fontsize=18)
             from matplotlib.legend import Legend
-            leg = Legend(ax, linesShape[0], linesShape[1], bbox_to_anchor=(1.2, 1.0), title='Day', frameon=False)
+            leg = Legend(ax, linesShape[0], linesShape[1], bbox_to_anchor=(1.3, 0.4), title='Reactor', frameon=False, markerscale=1.5, fontsize=18)
             ax.add_artist(leg)
 
-        else:
-            linesColor[0].append(ax.scatter([], [], label=str(smpcats1[i]), color=colorlist1[i], marker=markerlist[i]))
+        else: #If there is no var2, change both color and marker with each category in var1
+            linesColor[0].append(ax.scatter([], [], label=str(smpcats1[i]), color=colorlist[i], marker=markerlist[i]))
             linesColor[1].append(smpcats1[i])
 
             xlist = metaPlot_i[xn]
             ylist = metaPlot_i[yn]
-            ax.scatter(xlist, ylist, label=None, color=colorlist1[i], marker=markerlist[i], s=100)
-    lgnd = ax.legend(linesColor[0], linesColor[1], ncol=1, bbox_to_anchor=(1.0, 1.05), title='', frameon=False, markerscale=1.5, fontsize=14)
+            ax.scatter(xlist, ylist, label=None, color=colorlist[i], marker=markerlist[i], s=100)
+            ax.legend(linesColor[0], linesColor[1], ncol=1, bbox_to_anchor=(1.0, 1.05), title='', frameon=False, markerscale=1.5, fontsize=12)
     # for lgi in range(len(smpcats1)):
     #     lgnd.legendHandles[lgi]._sizes = [120]
+
+    ##Put tags at each point
+    if tag != 'None':
+        for ix in metaPlot.index:
+            tagtext = metaPlot.loc[ix, tag]
+            tagx = metaPlot.loc[ix, xn]
+            tagy = metaPlot.loc[ix, yn]
+            ax.annotate(tagtext, (tagx, tagy))
 
     ax.set_xlabel(xn)
     ax.set_ylabel(yn)
     plt.title(title)
-    plt.tight_layout(rect=[0, 0, 0.75, 1])
+    plt.tight_layout(rect=[0, 0, 0.85, 1])
     if savename != 'None':
         plt.savefig(savename)
     plt.show()
+
+def plotMFA(objlist, nameslist, path, rarefy=False):
+    if len(objlist) != len(nameslist):
+        print('Lengths dont match')
+        return 0
+
+    #Merge tabs into new df, make sure SVs/OTUs are common
+    df = objlist[0]['tab']
+    newcolnames = [] #Set new column names to indicate the object
+    [newcolnames.append(item + ':' + nameslist[0]) for item in df.columns]
+    df.columns = newcolnames
+    seq = objlist[0]['seq']
+    df = pd.concat([df, seq], axis=1)
+    df = df.set_index('seq')
+    for i in range(1, len(objlist)):
+        tab = objlist[i]['tab']
+        newcolnames = []  # Set new column names to indicate the object
+        [newcolnames.append(item + ':' + nameslist[i]) for item in tab.columns]
+        tab.columns = newcolnames
+        seq = objlist[i]['seq']
+        tab = pd.concat([tab, seq], axis=1)
+        tab = tab.set_index('seq')
+        df = pd.concat([df, tab], axis=1)
+    df = df.fillna(0)
+
+    seqlist = []; seqnames = []; counter = 0
+    for s in df.index:
+        seqlist.append(s)
+        counter += 1
+        seqnames.append('SV'+str(counter))
+    df['SV'] = seqnames
+    df = df.set_index('SV') #New df with all tabs
+
+    if rarefy:
+        df = rarefy1(df)
+
+    #Prepare df for MFA - prepare group dictionary and df
+    smp_dict = {}
+    counter = 0
+    for c in df.columns:
+        smp = c.split(':')[0]
+        if smp not in smp_dict:
+            list(range(counter * len(df.index), counter * len(df.index) + len(df.index)))
+            smp_dict[smp] = [str(x) for x in range(counter*len(df.index), counter*len(df.index) + len(df.index))]
+            counter += 1
+    mfa_df = pd.DataFrame(0, index=nameslist, columns=[str(x) for x in range(len(df.index)*len(smp_dict))])
+
+    #Prepare df for MFA - put values in df
+    for c in df.columns:
+        print(c)
+        smp = c.split(':')[0]
+        tb = c.split(':')[1]
+        mfa_df.loc[tb, smp_dict[smp]] = df[c].values.tolist()
+
+    #Remove columns with all zeros
+    keepcols = mfa_df.sum()[mfa_df.std() != 0].index.tolist()
+    remcols = mfa_df.sum()[mfa_df.std() == 0].index.tolist()
+    for smp in smp_dict.keys():
+        print(smp)
+        dict_keepscols = smp_dict[smp]
+        intersect = list(set(remcols).intersection(dict_keepscols))
+        for item in intersect:
+            remcols.remove(item)
+            dict_keepscols.remove(item)
+        smp_dict[smp] = dict_keepscols
+    mfa_df = mfa_df[keepcols]
+
+    #Save data
+    if rarefy:
+        mfa_df.to_csv(path+'MFA_df_rarefied.csv')
+        with open(path+'MFA_groups_rarefied.pickle', 'wb') as f:
+            pickle.dump(smp_dict, f)
+    else:
+        mfa_df.to_csv(path+'MFA_df.csv')
+        with open(path+'MFA_groups.pickle', 'wb') as f:
+            pickle.dump(smp_dict, f)
+    print('Data saved to path')
+
+    ## Do MFA
+    mfa = prince.MFA(groups=smp_dict, n_components=2, n_iter=3, copy=True, engine='auto', random_state=42)
+    mfa = mfa.fit(mfa_df)
+    print(mfa.row_coordinates(mfa_df))
+    mfa.plot_row_coordinates(mfa_df)
+    plt.show()
+
 
 
 # ----------------------------------
@@ -1226,6 +1442,530 @@ def plotRarefaction(obj, var, slist='all', step=2000, savename='None'):
     if savename != 'None':
         plt.savefig(savename+'.png')
     plt.show()
+
+# Compare different empirical functions as fits to Diversity Accumulation Curves
+# Returns a dataframe wih r2 and parameters for each function and curve
+# If savename is specified, a table of the rarefaction curves and each plot are saved
+def compareDAC(obj, var, slist='all', step=2000, q=0, savename='None'):
+    tab = obj['tab']
+    meta = obj['meta']
+
+    if slist == 'all':
+        slist = meta[var]
+
+    # Pick out the samples in tab that are specified in slist
+    submeta = meta.loc[meta[var].isin(slist)]
+    if 'Logic_order' in submeta.columns:
+        submeta = submeta.sort_values(by=['Logic_order']) #Make sure samples  in smplist are in correct order
+    smplist = submeta.index.tolist()
+    subtab = tab.loc[:, smplist]
+    subtab['sum'] = subtab.sum(axis=1)
+    subtab = subtab[subtab['sum'] > 0]
+    subtab = subtab.drop('sum', axis=1)
+
+    plottab = [['count']+smplist] #Table to plot, first col is count
+    plottab.append([1]*(len(smplist)+1))
+    maxcount = int(max(subtab.sum())) #Max number of reads in a sample
+    numberofsteps = math.floor(maxcount/step) #Number of steps to take
+    counter = 0  #Just to keep track of progress
+    # Start iteration
+    for i in range(step, maxcount, step):
+        counter+=1
+        if counter%5 == 0:  #Just to keep track of progress
+            print(counter, ' out of ', numberofsteps + 1, ' steps')
+
+        # Rarefy to specific depth
+        raretab = rarefy1(subtab, depth=i)
+        svcount = naiveDivAlpha(raretab, q)  #Calculate diversity value (order q)
+        templist=[i]
+        for s in smplist:
+            if s in svcount.index:
+                templist = templist + [svcount[s]]
+            else:
+                templist = templist + [0]
+        plottab.append(templist)
+    plottab = pd.DataFrame(plottab[1:], columns=plottab[0])
+
+    # Data smoothing
+    # Flather 1996 J Biogeography, 23, 155; Tjörve 2003 J Biogeography, 30, 827;
+    def monod(xdata, a, b):
+        return a*xdata/(b+xdata)
+    monod_dict = {}
+    def power(xdata, a, b):
+        return a*xdata**b
+    power_dict = {}
+    def exponential(xdata, a, b):
+        return a+b*np.log(xdata)
+    exponential_dict = {}
+    def neg_exponential(xdata, a, b):
+        return a*(1-np.exp(-b*xdata))
+    neg_exponential_dict = {}
+    def asym_regression(xdata, a, b, c):
+        return a-b*c**xdata
+    asym_regression_dict = {}
+    def rational(xdata, a, b, c):
+        return (a+b*xdata)/(1+c*xdata)
+    rational_dict = {}
+
+    # Help function
+    def closest_value_pos(arr, val): #Find position of a value in array that is closest to val
+        return np.abs(arr-val).argmin()
+    def r_squared(ydata, fdata): # Find r squared value for two lists of data of equal length
+        y_mean = np.mean(ydata)
+        ss_tot = 0
+        ss_res = 0
+        for d in range(len(ydata)):
+            ss_tot = ss_tot + (ydata[d] - y_mean)**2
+            ss_res = ss_res + (ydata[d] - fdata[d])**2
+        return 1 - ss_res/ss_tot
+
+    # Use plottab2 for data smoothing
+    plottab = plottab.applymap(float)
+    for smp in smplist: #Start from 1 because 0 is 'count'
+        xydata = plottab.loc[:, ['count', smp]][plottab.loc[:, smp] != 0]
+
+        #Monod
+        a_est = xydata.iloc[:, 1].tolist()[-1] #Final value of y is estimate of a_est
+        b_pos = closest_value_pos(xydata.iloc[:, 1], a_est/2) #Position of half saturation constant
+        b_est = xydata.iloc[:, 0].tolist()[b_pos] #Estimate of ks
+        popt, pcov =optimize.curve_fit(monod, xydata.iloc[:, 0], xydata.iloc[:, 1], p0=[a_est, b_est])
+        monod_dict[smp] = popt #These are fitted Monod constants
+
+        #Power
+        a_est = 100
+        b_est = 0.1
+        popt, pcov = optimize.curve_fit(power, xydata.iloc[:, 0], xydata.iloc[:, 1], p0=[a_est, b_est])
+        power_dict[smp] = popt
+
+        #Exponential
+        a_est = -100
+        b_est = 100
+        popt, pcov = optimize.curve_fit(exponential, xydata.iloc[:, 0], xydata.iloc[:, 1], p0=[a_est, b_est])
+        exponential_dict[smp] = popt
+
+        #Negative exponential
+        a_est = 1000
+        b_est = 10**-8
+        popt, pcov = optimize.curve_fit(neg_exponential, xydata.iloc[:, 0], xydata.iloc[:, 1], p0=[a_est, b_est])
+        neg_exponential_dict[smp] = popt
+
+        #Asymptotic regression
+        a_est = 1000
+        b_est = 500
+        c_est = 0.1
+        popt, pcov = optimize.curve_fit(asym_regression, xydata.iloc[:, 0], xydata.iloc[:, 1], p0=[a_est, b_est, c_est])
+        asym_regression_dict[smp] = popt
+
+        #Rational
+        a_est = 500
+        b_est = 1
+        c_est = 0.001
+        popt, pcov = optimize.curve_fit(rational, xydata.iloc[:, 0], xydata.iloc[:, 1], p0=[a_est, b_est, c_est])
+        rational_dict[smp] = popt
+
+        ###perr = np.sqrt(np.diag(pcov))  #This can be used to find standard deviations of constants
+
+    # Save results as plottab and print as csv file if desired
+    if savename != 'None':
+        plottab.to_csv(savename+'.csv')
+
+    #Run optimization and plot results
+    regression_output = [['Function', 'Sample', 'r_squared', 'Constants']]
+    plt.rcParams.update({'font.size': 16})
+    for func in [[monod, monod_dict, 'Monod'], [power, power_dict, 'Power'], [exponential, exponential_dict, 'Exp'],
+                 [neg_exponential, neg_exponential_dict, 'Neg_exp'], [asym_regression, asym_regression_dict, 'Asym_regr'],
+                 [rational, rational_dict, 'Rational']]:
+
+        colorcheck = []
+        plt.figure(figsize=(10, 6))
+
+        for smp in smplist:
+            stype = submeta.loc[smp, var]
+            xdata = plottab['count'][plottab[smp] != 0]
+            ydata = plottab[smp][plottab[smp] != 0]
+            fdata = func[0](xdata, *func[1][smp])
+
+            regression_data = [func[2], smp, r_squared(ydata, fdata),  func[1][smp]. tolist()]
+            regression_output.append(regression_data)
+
+            #Plot
+            if stype not in colorcheck:
+                colorcheck.append(stype)
+                plt.plot(xdata, ydata, lw=0, marker='.', ms=2, label='_nolegend_', color=colorlistX[len(colorcheck)-1])
+                plt.plot(xdata, func[0](xdata, *func[1][smp]), lw=1, label=stype, color=colorlistX[len(colorcheck)-1])
+            else:
+                plt.plot(xdata, ydata, lw=0, marker='.', ms=2, label='_nolegend_', color=colorlistX[len(colorcheck) - 1])
+                plt.plot(xdata, func[0](xdata, *func[1][smp]), lw=1, label='_nolegend_', color=colorlistX[len(colorcheck) - 1])
+        plt.legend(loc='best')
+        plt.xlabel('Number of reads')
+        plt.xticks(rotation=90)
+        plt.ylabel('Diversity')
+        plt.title(func[2])
+        plt.tight_layout()
+        if savename != 'None':
+            plt.savefig(savename+'_'+func[3]+'.png')
+        plt.show()
+
+    regression_output = pd.DataFrame(regression_output[1:], columns=regression_output[0])
+    return regression_output
+
+# Plots smoothed Diversity Accumulation Curves based on chosen function
+# Also prints R2 value for each line
+def plotSmoothedDAC(obj, var, slist='all', step=2000, q=0, function='rational', savename='None'):
+    tab = obj['tab']
+    meta = obj['meta']
+
+    if slist == 'all':
+        slist = meta[var]
+
+    # Pick out the samples in tab that are specified in slist
+    submeta = meta.loc[meta[var].isin(slist)]
+    if 'Logic_order' in submeta.columns:
+        submeta = submeta.sort_values(by=['Logic_order']) #Make sure samples  in smplist are in correct order
+    smplist = submeta.index.tolist()
+    subtab = tab.loc[:, smplist]
+    subtab['sum'] = subtab.sum(axis=1)
+    subtab = subtab[subtab['sum'] > 0]
+    subtab = subtab.drop('sum', axis=1)
+
+    plottab = [['count']+smplist] #Table to plot, first col is count
+    plottab.append([1]*(len(smplist)+1))
+    maxcount = int(max(subtab.sum())) #Max number of reads in a sample
+    numberofsteps = math.floor(maxcount/step) #Number of steps to take
+    counter = 0  #Just to keep track of progress
+    # Start iteration
+    for i in range(step, maxcount, step):
+        counter+=1
+        if counter%5 == 0:  #Just to keep track of progress
+            print(counter, ' out of ', numberofsteps + 1, ' steps')
+
+        # Rarefy to specific depth
+        raretab = rarefy1(subtab, depth=i)
+        svcount = naiveDivAlpha(raretab, q)  #Calculate diversity value (order q)
+        templist=[i]
+        for s in smplist:
+            if s in svcount.index:
+                templist = templist + [svcount[s]]
+            else:
+                templist = templist + [0]
+        plottab.append(templist)
+    plottab = pd.DataFrame(plottab[1:], columns=plottab[0])
+
+    # Data smoothing
+    # Flather 1996 J Biogeography, 23, 155; Tjörve 2003 J Biogeography, 30, 827;
+    def monod(xdata, a, b):
+        return a*xdata/(b+xdata)
+    def power(xdata, a, b):
+        return a*xdata**b
+    def exponential(xdata, a, b):
+        return a+b*np.log(xdata)
+    def neg_exponential(xdata, a, b):
+        return a*(1-np.exp(-b*xdata))
+    def asym_regression(xdata, a, b, c):
+        return a-b*c**xdata
+    def rational(xdata, a, b, c):
+        return (a+b*xdata)/(1+c*xdata)
+
+    # Help function
+    def closest_value_pos(arr, val): #Find position of a value in array that is closest to val
+        return np.abs(arr-val).argmin()
+    def r_squared(ydata, fdata): # Find r squared value for two lists of data of equal length
+        y_mean = np.mean(ydata)
+        ss_tot = 0
+        ss_res = 0
+        for d in range(len(ydata)):
+            ss_tot = ss_tot + (ydata[d] - y_mean)**2
+            ss_res = ss_res + (ydata[d] - fdata[d])**2
+        return 1 - ss_res/ss_tot
+
+    # Use plottab2 for original data, put smoothed data back into plottab
+    plottab2 = plottab.copy()
+    plottab2 = plottab2.applymap(float)
+    par_dict = {}
+    for smp in smplist:
+        xydata = plottab2.loc[:, ['count', smp]][plottab2.loc[:, smp] != 0]
+
+        if function == 'rational':
+            a_est = 500
+            b_est = 1
+            c_est = 0.001
+            popt, pcov = optimize.curve_fit(rational, xydata.iloc[:, 0], xydata.iloc[:, 1], p0=[a_est, b_est, c_est])
+            plottab.loc[xydata.index, smp] = rational(xydata.iloc[:, 0], *popt)
+            par_dict[smp] = popt; plotfunc = rational
+
+        elif function == 'monod':
+            a_est = xydata.iloc[:, 1].tolist()[-1] #Final value of y is estimate of a_est
+            b_pos = closest_value_pos(xydata.iloc[:, 1], a_est/2) #Position of half saturation constant
+            b_est = xydata.iloc[:, 0].tolist()[b_pos] #Estimate of ks
+            popt, pcov =optimize.curve_fit(monod, xydata.iloc[:, 0], xydata.iloc[:, 1], p0=[a_est, b_est])
+            plottab.loc[xydata.index, smp] = monod(xydata.iloc[:, 0], *popt)
+            par_dict[smp] = popt; plotfunc = monod
+
+        elif function == 'power':
+            a_est = 100
+            b_est = 0.1
+            popt, pcov = optimize.curve_fit(power, xydata.iloc[:, 0], xydata.iloc[:, 1], p0=[a_est, b_est])
+            plottab.loc[xydata.index, smp] = power(xydata.iloc[:, 0], *popt)
+            par_dict[smp] = popt; plotfunc = power
+
+        elif function == 'exponential':
+            a_est = -100
+            b_est = 100
+            popt, pcov = optimize.curve_fit(exponential, xydata.iloc[:, 0], xydata.iloc[:, 1], p0=[a_est, b_est])
+            plottab.loc[xydata.index, smp] = exponential(xydata.iloc[:, 0], *popt)
+            par_dict[smp] = popt; plotfunc = exponential
+
+        elif function == 'neg_exponential':
+            a_est = 1000
+            b_est = 10**-8
+            popt, pcov = optimize.curve_fit(neg_exponential, xydata.iloc[:, 0], xydata.iloc[:, 1], p0=[a_est, b_est])
+            plottab.loc[xydata.index, smp] = neg_expontential(xydata.iloc[:, 0], *popt)
+            par_dict[smp] = popt; plotfunc = neg_exponential
+
+        elif function == 'asym_regression':
+            a_est = 1000
+            b_est = 500
+            c_est = 0.1
+            popt, pcov = optimize.curve_fit(asym_regression, xydata.iloc[:, 0], xydata.iloc[:, 1], p0=[a_est, b_est, c_est])
+            plottab.loc[xydata.index, smp] = asym_regression(xydata.iloc[:, 0], *popt)
+            par_dict[smp] = popt; plotfunc = asym_regression
+
+        else:
+            return 'Error, function not found'
+
+    # Print smoothed results as csv file if desired
+    if savename != 'None':
+        plottab.to_csv(savename+'.csv')
+
+    #Plot smoothed results
+    plt.rcParams.update({'font.size': 16})
+    colorcheck = []
+    plt.figure(figsize=(10, 6))
+
+    for smp in smplist:
+        fdata = plottab[smp][plottab[smp] != 0]
+        ydata = plottab2[smp][plottab2[smp] != 0]
+        print(smp,' _R2= ', r_squared(ydata, fdata))
+        print(*par_dict[smp])
+
+        totcount = subtab[smp].sum()
+        xdata2 = range(10, totcount, 10)
+        fdata2 = plotfunc(xdata2, *par_dict[smp])
+
+        stype = submeta.loc[smp, var]
+        if stype not in colorcheck:
+            colorcheck.append(stype)
+            plt.plot(xdata2, fdata2, lw=1, label=stype, color=colorlistX[len(colorcheck)-1])
+        else:
+            plt.plot(xdata2, fdata2, lw=1, label='_nolegend_', color=colorlistX[len(colorcheck) - 1])
+    plt.legend(loc='best')
+    plt.xlabel('Number of reads')
+    plt.xticks(rotation=90)
+    plt.ylabel('Diversity')
+    plt.tight_layout()
+    if savename != 'None':
+        plt.savefig(savename+'_'+func[3]+'.png')
+    plt.show()
+
+def plotMonodRationalDAC(obj, var, slist='all', step=2000, q=0, savename='None', plot='Yes',
+                         colorlist='None', xlim='None', ylim='None', fontsize=22, figsize=(10, 6), printprogress='Yes'):
+    tab = obj['tab']
+    meta = obj['meta']
+
+    if slist == 'all':
+        slist = meta[var]
+
+    # Pick out the samples in tab that are specified in slist
+    submeta = meta.loc[meta[var].isin(slist)]
+    if 'Logic_order' in submeta.columns:
+        submeta = submeta.sort_values(by=['Logic_order']) #Make sure samples  in smplist are in correct order
+    smplist = submeta.index.tolist()
+    subtab = tab.loc[:, smplist]
+    subtab['sum'] = subtab.sum(axis=1)
+    subtab = subtab[subtab['sum'] > 0]
+    subtab = subtab.drop('sum', axis=1)
+
+    #Prepare for initial iteration
+    plottab_low = [['count']+smplist] #Table with only low counts, first col is count
+    mincount = int(min(subtab.sum())) #Min number of reads in a sample
+    if mincount > step:
+        mincount = step
+    shortsteps = int(mincount/50)
+    listofcounts_low = [10]+list(range(shortsteps, mincount, shortsteps))
+
+    #Prepare for full iteration
+    plottab = [['count']+smplist] #Full table to plot, first col is count
+    maxcount = int(max(subtab.sum())) #Max number of reads in a sample
+    maxlist = list(set(subtab.sum().values.tolist()))
+    rangelist = list(range(step, maxcount, step))
+    listofcounts = maxlist + rangelist
+    listofcounts = sorted(listofcounts)
+
+    counter = 0  #Just to keep track of progress
+
+    # Start for low count iteration
+    for i in listofcounts_low:
+        if printprogress == 'Yes':
+            counter+=1
+            if counter%10 == 0:  #Just to keep track of progress
+                print(counter, ' out of ', len(listofcounts_low)+len(listofcounts), ' steps')
+
+        # Rarefy to specific depth
+        raretab = rarefy1(subtab, depth=i)
+        svcount = naiveDivAlpha(raretab, q)  #Calculate diversity value (order q)
+        templist=[i]
+        for s in smplist:
+            if s in svcount.index:
+                templist = templist + [svcount[s]]
+            else:
+                templist = templist + [0]
+        plottab_low.append(templist)
+    plottab_low = pd.DataFrame(plottab_low[1:], columns=plottab_low[0])
+
+    # Start for full count iteration
+    for i in listofcounts:
+        if printprogress == 'Yes':
+            counter+=1
+            if counter%10 == 0:  #Just to keep track of progress
+                print(counter, ' out of ', len(listofcounts_low) + len(listofcounts), ' steps')
+
+        # Rarefy to specific depth
+        raretab = rarefy1(subtab, depth=i)
+        svcount = naiveDivAlpha(raretab, q)  #Calculate diversity value (order q)
+        templist=[i]
+        for s in smplist:
+            if s in svcount.index:
+                templist = templist + [svcount[s]]
+            else:
+                templist = templist + [0]
+        plottab.append(templist)
+    plottab = pd.DataFrame(plottab[1:], columns=plottab[0])
+
+    # Data smoothing
+    # Flather 1996 J Biogeography, 23, 155; Tjörve 2003 J Biogeography, 30, 827;
+    def monod(xdata, a, b):
+        return a*xdata/(b+xdata)
+    parameter_dict_low = {}
+    def rational(xdata, a, b, c):
+        return (a+b*xdata)/(1+c*xdata)
+    parameter_dict = {}
+
+    # Help function
+    def closest_value_pos(arr, val): #Find position of a value in array that is closest to val
+        return np.abs(arr-val).argmin()
+    def r_squared(ydata, fdata): # Find r squared value for two lists of data of equal length
+        y_mean = np.mean(ydata)
+        ss_tot = 0
+        ss_res = 0
+        for d in range(len(ydata)):
+            ss_tot = ss_tot + (ydata[d] - y_mean)**2
+            ss_res = ss_res + (ydata[d] - fdata[d])**2
+        return 1 - ss_res/ss_tot
+
+    # Put smoothed data back into plottab_low and plottab
+    orig_plottab_low = plottab_low.copy()
+    orig_plottab = plottab.copy()
+
+    plottab_low = plottab_low.applymap(float)
+    plottab = plottab.applymap(float)
+    for smp in smplist:
+        #Monod for low
+        xydata_low = plottab_low.loc[:, ['count', smp]][plottab_low.loc[:, smp] != 0]
+        a_est = xydata_low.iloc[:, 1].tolist()[-1] #Final value of y is estimate of a_est
+        b_pos = closest_value_pos(xydata_low.iloc[:, 1], a_est/2) #Position of half saturation constant
+        b_est = xydata_low.iloc[:, 0].tolist()[b_pos] #Estimate of ks
+        popt, pcov =optimize.curve_fit(monod, xydata_low.iloc[:, 0], xydata_low.iloc[:, 1], p0=[a_est, b_est])
+        plottab_low.loc[xydata_low.index, smp] = monod(xydata_low.iloc[:, 0], *popt)
+        parameter_dict_low[smp] = popt
+
+        #Rational for high
+        xydata = plottab.loc[:, ['count', smp]][plottab.loc[:, smp] != 0]
+        a_est = 500
+        b_est = 1
+        c_est = 0.001
+        popt, pcov = optimize.curve_fit(rational, xydata.iloc[:, 0], xydata.iloc[:, 1], p0=[a_est, b_est, c_est])
+        plottab.loc[xydata.index, smp] = rational(xydata.iloc[:, 0], *popt)
+        parameter_dict[smp] = popt
+
+    #Combine plottab_low and plottab
+    plottab = plottab[plottab['count'] > mincount]
+    plottab = plottab_low.append(plottab, ignore_index=True)
+    orig_plottab = orig_plottab[orig_plottab['count'] > mincount]
+    orig_plottab = orig_plottab_low.append(orig_plottab, ignore_index=True)
+
+    if plot == 'Yes':
+        #Plot results
+        plt.rcParams.update({'font.size': fontsize})
+
+        if colorlist != 'None':
+            colorlist = colorlist
+        else:
+            colorlist = colorlistX
+
+        #First make figure with smoothed results
+        colorcheck = []
+        plt.figure(1, figsize=figsize)
+        for smp in smplist:
+            xdata = plottab['count'][plottab[smp] != 0]
+            fdata = plottab[smp][plottab[smp] != 0]
+
+            stype = submeta.loc[smp, var]
+            if stype not in colorcheck:
+                colorcheck.append(stype)
+                plt.plot(xdata, fdata, lw=2, label=stype, color=colorlist[len(colorcheck)-1])
+            else:
+                plt.plot(xdata, fdata, lw=2, label='_nolegend_', color=colorlist[len(colorcheck) - 1])
+        plt.legend(loc='best')
+        plt.xlabel('Number of reads')
+        plt.xticks(rotation=90)
+        plt.ylabel('Diversity')
+        if xlim != 'None':
+            plt.xlim(xlim[0], xlim[1])
+        if ylim != 'None':
+            plt.ylim(ylim[0], ylim[1])
+        plt.tight_layout()
+        if savename != 'None':
+            plt.savefig(savename+'_smoothedfig')
+
+        # Then make figure to check if smoothing is ok
+        colorcheck = []
+        plt.figure(2, figsize=figsize)
+        for smp in smplist:
+            xdata = plottab['count'][plottab[smp] != 0]
+            ydata = orig_plottab[smp][plottab[smp] != 0]
+            fdata = plottab[smp][plottab[smp] != 0]
+
+            print(smp, ' ....')
+            print('R2= ', r_squared(ydata, fdata))
+            print(parameter_dict_low[smp], ' Asymp low= ', parameter_dict_low[smp][0])
+            print(parameter_dict[smp], ' Asymp high= ', parameter_dict[smp][1] / parameter_dict[smp][2])
+            print('......')
+
+            stype = submeta.loc[smp, var]
+            if stype not in colorcheck:
+                colorcheck.append(stype)
+                plt.plot(xdata, fdata, lw=2, label=stype, color=colorlist[len(colorcheck) - 1])
+                plt.plot(xdata, ydata, lw=0, marker='.', label=stype, color=colorlist[len(colorcheck) - 1])
+            else:
+                plt.plot(xdata, fdata, lw=2, label='_nolegend_', color=colorlist[len(colorcheck) - 1])
+                plt.plot(xdata, ydata, lw=0, marker='.', label='_nolegend_', color=colorlist[len(colorcheck) - 1])
+        plt.legend(loc='best')
+        plt.xlabel('Number of reads')
+        plt.xticks(rotation=90)
+        plt.ylabel('Diversity')
+        if xlim != 'None':
+            plt.xlim(xlim[0], xlim[1])
+        if ylim != 'None':
+            plt.ylim(ylim[0], ylim[1])
+        plt.tight_layout()
+        if savename != 'None':
+            plt.savefig(savename+'_controlfig')
+
+        plt.show()
+
+    else:
+        return plottab
+
 
 def plotRankAbundance(tab, slist):
     fig, ax = plt.subplots(1, figsize=(8,5))
