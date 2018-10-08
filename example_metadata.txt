@@ -1,0 +1,7 @@
+id	Reactor	Days	Feed
+S1	R1	1	Wastewater
+S2	R2	2	VFAs
+S3	R3	2	VFAs
+S4	R4	2	VFAs
+S5	R2	4	VFAs
+S6	R3	4	VFAs
