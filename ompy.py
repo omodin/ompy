@@ -651,6 +651,7 @@ def plotHeatmap(obj, var='None', levels=['Phylum', 'Genus'], subsetLevels='None'
     plt.xticks(rotation=90)
     plt.setp(ax.get_xticklabels(), fontsize=fontSize)
     ax.set_ylabel('')
+    plt.yticks(rotation=0)
     plt.setp(ax.get_yticklabels(), fontsize=fontSize)
     plt.tight_layout()
     if savename != 'None':
@@ -987,6 +988,80 @@ def phylDivBeta(tab, distmat, q=1, rarefy='None', dis=True):
         return beta2Dist(beta=outFD, q=q, divType='phyl')
     else:
         return outFD
+
+# Visualizes how alpha diversity depends on diversity order
+# If distmat is specified phylogenetic alpha diversity is calculated, else naive
+# rarefy specifies depth to rarefy frequency table (default is the smallest sample count, 'min')
+# var refers to column heading in meta data used to color code samples
+# slist is a list of samples from the var column to include (default is all)
+# order refers to column heading in meta data used to order the samples
+# If ylog=True, the y-axis of the plot will be logarithmic
+def plotDivAlpha(obj, distmat='None', rarefy='min', var='None', slist='All', order='None', ylog=False, colorlist='None', savename='None'):
+    #Pick out samples to include based on var and slist
+    meta = obj['meta']
+    if order != 'None':
+        meta = meta.sort_values(order)
+
+    if var == 'None':
+        smplist = meta.index.tolist()
+    elif slist == 'All':
+        smplist = meta[var].index.tolist()
+    else:
+        smplist = meta.loc[slist, var].index.tolist()
+
+    #Dataframe for holding results
+    xvalues = np.arange(0, 2.01, 0.02)
+    df = pd.DataFrame(0, index=xvalues, columns=smplist)
+
+    #Put data in dataframe
+    tab = obj['tab'][smplist]
+    for x in xvalues:
+        if distmat == 'None':
+            alphadiv = naiveDivAlpha(tab, q=x, rarefy=rarefy)
+        else:
+            alphadiv = phylDivAlpha(tab, distmat, q=x, rarefy=rarefy)
+        df.loc[x, smplist] = alphadiv
+
+    #Plot data
+    plt.rcParams.update({'font.size': 20})
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    if colorlist == 'None':
+        colorlist = get_colors_markers('colors')
+    else:
+        colorlist = colorlist
+    colorcheck = []
+
+    for s in df.columns:
+        if var != 'None':
+            cv = meta.loc[s, var]
+        else:
+            cv = s
+
+        if cv not in colorcheck:
+            colorcheck.append(cv)
+            lab = cv
+        else:
+            lab = '_nolegend_'
+
+        colnr = colorcheck.index(cv)
+        col = colorlist[colnr % len(colorlist)]
+
+        if ylog:
+            ax.semilogy(df.index, df[s], lw=1, color=col, label=lab)
+        else:
+            ax.plot(df.index, df[s], lw=1, color=col, label=lab)
+
+    ax.set_ylabel('Diversity number ($^q$D)')
+    ax.set_xlabel('Diversity order (q)')
+    ax.set_xticks([0.0, 0.5, 1.0, 1.5, 2.0])
+    ax.set_xlim(0, 2)
+
+    plt.legend()
+    plt.tight_layout()
+    if savename != 'None':
+        plt.savefig(savename)
+    plt.show()
 
 # Visualizes dissimilarities in PCoA plot
 # dist is distance matrix and meta is meta data
