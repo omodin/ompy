@@ -79,11 +79,7 @@ def get_colors_markers(type='colors', plot=False):
 # fasta is fasta file with sequences. SV names should correspond to those in tab
 # meta is meta data
 # sep specifies separator used in input files e.g. ',' or '\t'
-def loadFiles(path='None', tab='None', fasta='None', meta='None', sep=','):  # Import file and convert them to suitable format
-    if path == 'None':
-        print('Error: No path specified')
-        return 0
-
+def loadFiles(path='', tab='None', fasta='None', meta='None', sep=','):  # Import file and convert them to suitable format
     #Prepare tab and tax
     if tab != 'None':
         # Read count table with taxa information
@@ -556,6 +552,7 @@ def plotHeatmap(obj, var='None', levels=['Phylum', 'Genus'], subsetLevels='None'
     #Calculate relative abundances and store in df ra
     tab = merged_obj['tab']
     ra = 100*tab/tab.sum()
+    merged_obj['ra'] = ra
 
     ## Make sure samples are in the right order in meta data
     if order != 'None':
@@ -572,12 +569,10 @@ def plotHeatmap(obj, var='None', levels=['Phylum', 'Genus'], subsetLevels='None'
     ## Subset based on pattern
     if subsetLevels != 'None' and isinstance(subsetLevels, list) and isinstance(subsetPatterns, list):
         subset_obj = subsetTextPatterns(merged_obj, subsetLevels, subsetPatterns)
-        ra = subset_obj['ra']
+        merged_obj = subset_obj
 
     ## Groupby taxa
-    obj_to_group = {}
-    obj_to_group['ra'] = ra; obj_to_group['tax'] = merged_obj['tax']
-    taxa_obj = groupbyTaxa(obj_to_group, levels=levels, nameType=nameType)
+    taxa_obj = groupbyTaxa(merged_obj, levels=levels, nameType=nameType)
     ra = taxa_obj['ra']; table = ra.copy()
 
     # Subset for top taxa
@@ -631,7 +626,7 @@ def plotHeatmap(obj, var='None', levels=['Phylum', 'Genus'], subsetLevels='None'
             for c in table.columns:
                 value = float(table.loc[r, c])
                 if value < 0.1 and value > 0:
-                    labelvalues.loc[r, c] = -0.1
+                    labelvalues.loc[r, c] = '<0.1'
                 elif value < 10 and value >= 0.1:
                     labelvalues.loc[r, c] = round(value, 1)
                 elif value > 99:
@@ -640,12 +635,13 @@ def plotHeatmap(obj, var='None', levels=['Phylum', 'Genus'], subsetLevels='None'
                     labelvalues.loc[r, c] = round(value)
                 else:
                     labelvalues.loc[r, c] = 0
+        labelvalues = labelvalues.applymap(str)
 
     #Plot
     fig, ax = plt.subplots(figsize=(14, 10))
     sns.set(font_scale=labelSize)
     if labels:
-        sns.heatmap(table, annot=labelvalues, cmap='Reds', linewidths=0.5, robust=True, cbar=False, ax=ax)
+        sns.heatmap(table, annot=labelvalues, fmt='', cmap='Reds', linewidths=0.5, robust=True, cbar=False, ax=ax)
     else:
         sns.heatmap(table, cmap='Reds', linewidths=0.5, robust=True, cbar=False, ax=ax)
     plt.xticks(rotation=90)
@@ -664,12 +660,12 @@ def plotHeatmap(obj, var='None', levels=['Phylum', 'Genus'], subsetLevels='None'
 # Returns matrix for pairwise distances between SVs based on Levenshtein/Hamming distances (uses Levenshtein package)
 # Saves results as pickle file at location specified in savename
 # Output is needed as input for phylogenetic diversity index calculations
-def phylDistMat(seq, savename='PhylDistMat.pickle'):
+def phylDistMat(seq, pickleOrCsv='pickle', savename='PhylDistMat'):
     svnames = list(seq.index)
     df = pd.DataFrame(0, index=svnames, columns=svnames)
     for i in range(len(svnames) - 1):
         if i % 10 == 0:
-            print(i)
+            print(i, ' out of ', len(svnames))
         for j in range(i + 1, len(svnames)):
             n1 = svnames[i]
             n2 = svnames[j]
@@ -683,9 +679,12 @@ def phylDistMat(seq, savename='PhylDistMat.pickle'):
                 dist = Lv.distance(s1, s2) / maxlen
 
             df.loc[n1, n2] = dist; df.loc[n2, n1] = dist
-    with open(savename, 'wb') as handle:
-        pickle.dump(df, handle)
-    print('Finished printing Phyldistmat as pickle file')
+    if pickleOrCsv == 'pickle':
+        with open(savename+'.pickle', 'wb') as handle:
+            pickle.dump(df, handle)
+    else:
+        df.to_csv(savename+'.csv')
+    print('Finished printing Phyldistmat as pickle or csv file')
 
 # Returns Rao's quadratic entropy, sum(sum(dij*pi*pj))
 # Function used in Chiu's phylogenetic diversity functions
@@ -1016,6 +1015,9 @@ def plotDivAlpha(obj, distmat='None', rarefy='min', var='None', slist='All', ord
     #Put data in dataframe
     tab = obj['tab'][smplist]
     for x in xvalues:
+        timeprogress = int(100*x/xvalues[-1])
+        if timeprogress%10 == 0:
+            print(timeprogress,'% complete')
         if distmat == 'None':
             alphadiv = naiveDivAlpha(tab, q=x, rarefy=rarefy)
         else:
@@ -1106,8 +1108,12 @@ def plotPCoA(dist, meta, var1='None', var2='None', tag='None', order='None', tit
     #Set axis names and make dataframe for plotting
     pc1_perc = round(100 * prop[0], 1)
     xn = 'PC1 (' + str(pc1_perc) + '%)'
+    if '+' in xn:
+        xn = xn[:4] + xn[-1]
     pc2_perc = round(100 * prop[1], 1)
     yn = 'PC2 (' + str(pc2_perc) + '%)'
+    if '+' in yn:
+        yn = yn[:4] + yn[-1]
 
     smplist = dist.index
     pcoadf = pd.DataFrame({xn:coords[0], yn:coords[1]}, index=smplist)
@@ -1178,7 +1184,7 @@ def plotPCoA(dist, meta, var1='None', var2='None', tag='None', order='None', tit
             xlist = metaPlot_i[xn]
             ylist = metaPlot_i[yn]
             ax.scatter(xlist, ylist, label=None, color=colorlist[i], marker=markerlist[i], s=100)
-            ax.legend(linesColor[0], linesColor[1], ncol=1, bbox_to_anchor=(1.0, 1.0), title='', frameon=False, markerscale=1.5, fontsize=12)
+            ax.legend(linesColor[0], linesColor[1], ncol=1, bbox_to_anchor=(1, 1), title='', frameon=False, markerscale=1.5, fontsize=18)
 
     ##Put tags at each point
     if tag != 'None':
@@ -1191,7 +1197,7 @@ def plotPCoA(dist, meta, var1='None', var2='None', tag='None', order='None', tit
     ax.set_xlabel(xn)
     ax.set_ylabel(yn)
     plt.title(title)
-    plt.tight_layout(rect=[0, 0, 1, 1])
+    plt.tight_layout(rect=[0, 0, 0.85, 1])
     if savename != 'None':
         plt.savefig(savename)
     plt.show()
