@@ -2,10 +2,9 @@ import pandas as pd
 import numpy as np
 import Levenshtein as Lv
 import math
-import pickle
-import seaborn as sns
 import matplotlib.pyplot as plt
 from matplotlib import colors as mcolors
+import tkinter as tk
 
 pd.options.mode.chained_assignment = None  # default='warn'
 
@@ -169,16 +168,16 @@ def returnFiles(obj, path, sep=','):  # Saves files in the same format as they w
     if 'tab' in obj and 'tax' in obj:
         tab = obj['tab']; tax = obj['tax']
         tab_tax = pd.concat([tab, tax], axis=1)
-        tab_tax.to_csv(path + 'output_CountTaxaTable.csv', sep=sep)
+        tab_tax.to_csv(path + 'output_table.csv', sep=sep)
     elif 'tab' in obj:
         tab = obj['tab']
-        tab.to_csv(path+'output_CountTable.csv', sep=sep)
+        tab.to_csv(path + 'output_table.csv', sep=sep)
     else:
         print('No tab and tax')
 
     if 'meta' in obj:
         meta = obj['meta']
-        meta.to_csv(path + 'output_Meta.csv', sep=sep)
+        meta.to_csv(path + 'output_meta.csv', sep=sep)
     else:
         print('No meta')
 
@@ -188,7 +187,7 @@ def returnFiles(obj, path, sep=','):  # Saves files in the same format as they w
         for s in seq.index:
             fasta.append('>' + s + '\n')
             fasta.append(seq.loc[s, 'seq'] + '\n')
-        with open(path + 'output_SVs.fa', 'w') as f:
+        with open(path + 'output_seqs.fa', 'w') as f:
             for i in fasta:
                 f.write(i)
     else:
@@ -528,24 +527,34 @@ def groupbyTaxa(obj, levels=['Phylum', 'Genus'], nameType='SV'):
         out['meta'] = obj['meta']
     return out
 
-# Plots heatmap
-# var specifies heading in meta data used to merge samples
-# levels specifies taxonomic levels used in y axis
-# subsetLevels and subsetPatterns refer to subsetTextPatters function which can be used to filter results
-# order refers to heading in meta data used to order samples
-# numberToPlot refers to the number of taxa with highest abundance to include in the heatmap
-# method refers to the method used to define the taxa with highest abundance, 'max_sample' is max relative abundance in a sample,
-# 'mean_all' is the mean relative abundance across all samples
-# nameType is nameType in groupbyTaxa function
-# if labels=True, include relative abundance values in heatmap, if False they are not included
-# labelSize is the size of the relative abundance lables in the heatmap
-# fontSize is the size of the axis text
-# savename is the name (also include path) of the saved png file, if 'None' no figure is saved
-def plotHeatmap(obj, var='None', levels=['Phylum', 'Genus'], subsetLevels='None', subsetPatterns='None',
-                order='None', numberToPlot=20, method='max_sample', nameType='SV', labels=True, labelSize=1, fontSize=15, savename='None'):
-    #Merge samples based on var
-    if var != 'None':
-        merged_obj = mergeSamples(obj, var=var)
+## Plots heatmap
+    # xAxis specifies heading in meta data used to merge samples
+    # levels specifies taxonomic levels used in y axis
+    # subsetLevels and subsetPatterns refer to subsetTextPatters function which can be used to filter results
+    # order refers to heading in meta data used to order samples
+    # numberToPlot refers to the number of taxa with highest abundance to include in the heatmap
+    # method refers to the method used to define the taxa with highest abundance, 'max_sample' is max relative abundance in a sample,
+    # 'mean_all' is the mean relative abundance across all samples
+    # nameType is nameType in groupbyTaxa function
+    # figSize is the width and height of the figure
+    # fontSize is refers to the axis text
+    # sepCol is a list of column numbers between which to include a separator, i.e. to clarify grouping of samples
+    # if labels=True, include relative abundance values in heatmap, if False they are not included
+    # labelSize is the font size of the relative abundance lables in the heatmap
+    # cThreshold is the relative abundance % at which the label color switches from black to white (for clarity)
+    # cMap is the color map used in the heatmap
+    # cLinear is a parameter determining how the color change with relative abundance, a value of 1 means the change is linear
+    # cBar is a list of tick marks to use if a color bar is included as legend
+    # savename is the name (also include path) of the saved png file, if 'None' no figure is saved
+def plotHeatmap(obj, xAxis='None', levels=['Phylum', 'Genus'], subsetLevels='None', subsetPatterns='None',
+                order='None', numberToPlot=20, method='max_sample', nameType='SV',
+                 figSize=(14, 10), fontSize=15, sepCol = [],
+                labels=True, labelSize=10, cThreshold=10,
+                cMap='Reds', cLinear=0.5, cBar=[], savename='None'):
+
+    #Merge samples based on xAxis
+    if xAxis != 'None':
+        merged_obj = mergeSamples(obj, var=xAxis)
     else:
         merged_obj = obj.copy()
 
@@ -560,8 +569,8 @@ def plotHeatmap(obj, var='None', levels=['Phylum', 'Genus'], subsetLevels='None'
         md[order] = md[order].astype(float)
         md = md.sort_values(by=order)
         logiclist = []
-        if var != 'None':
-            [logiclist.append(item) for item in md[var] if item not in logiclist]
+        if xAxis != 'None':
+            [logiclist.append(item) for item in md[xAxis] if item not in logiclist]
         else:
             [logiclist.append(item) for item in md.index if item not in logiclist]
         merged_obj['meta'] = md
@@ -637,20 +646,51 @@ def plotHeatmap(obj, var='None', levels=['Phylum', 'Genus'], subsetLevels='None'
                     labelvalues.loc[r, c] = 0
         labelvalues = labelvalues.applymap(str)
 
+    # Include empty columns in table to separate samples
+    #print(table.head())
+    if len(sepCol) > 0:
+        for i in range(len(sepCol)):
+            table.insert(loc=sepCol[i]+i, column=' '*(i+1), value=0)
+            if labels:
+                labelvalues.insert(loc=sepCol[i]+i, column=' '*(i+1), value='')
+
+
     #Plot
-    fig, ax = plt.subplots(figsize=(14, 10))
-    sns.set(font_scale=labelSize)
+    plt.rcParams.update({'font.size': fontSize})
+    fig, ax = plt.subplots(figsize=figSize)
+    im = ax.imshow(table, cmap=cMap, norm=mcolors.PowerNorm(gamma=cLinear), aspect='auto')
+    if len(cBar) > 0:
+        fig.colorbar(im, ticks=cBar)
+
+    # Fix axes
+    ax.set_xticks(np.arange(len(table.columns)))
+    ax.set_yticks(np.arange(len(table.index)))
+    ax.set_xticklabels(table.columns.tolist(), rotation=90)
+    ax.set_yticklabels(table.index.tolist(), rotation=0)
+
+    # Fix grid lines
+    ax.set_xticks(np.arange(-0.5, len(table.columns), 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, len(table.index), 1), minor=True)
+    ax.grid(which='minor', color='white', linestyle='-', linewidth=1)
+
+    if len(sepCol) > 0:
+        for i in range(len(sepCol)):
+            for j in range(6):
+                ax.axvline(sepCol[i]+i-0.5+j/5, 0, len(table.index), linestyle='-', lw=1, color='white')
+
+    # Fix labels
     if labels:
-        sns.heatmap(table, annot=labelvalues, fmt='', cmap='Reds', linewidths=0.5, robust=True, cbar=False, ax=ax)
-    else:
-        sns.heatmap(table, cmap='Reds', linewidths=0.5, robust=True, cbar=False, ax=ax)
-    plt.xticks(rotation=90)
-    plt.setp(ax.get_xticklabels(), fontsize=fontSize)
-    ax.set_ylabel('')
-    plt.yticks(rotation=0)
-    plt.setp(ax.get_yticklabels(), fontsize=fontSize)
-    plt.tight_layout()
+        for r in range(len(table.index)):
+            for c in range(len(table.columns)):
+                if table.iloc[r, c] > cThreshold:
+                    textcolor = 'white'
+                else:
+                    textcolor = 'black'
+                ax.text(c, r, labelvalues.iloc[r, c], fontsize=labelSize, ha='center', va='center', color=textcolor)
+    fig.tight_layout()
+
     if savename != 'None':
+        plt.savefig(savename+'.pdf', format='pdf')
         plt.savefig(savename)
     plt.show()
 
@@ -660,13 +700,27 @@ def plotHeatmap(obj, var='None', levels=['Phylum', 'Genus'], subsetLevels='None'
 # Returns matrix for pairwise distances between SVs based on Levenshtein/Hamming distances (uses Levenshtein package)
 # Saves results as pickle file at location specified in savename
 # Output is needed as input for phylogenetic diversity index calculations
-def phylDistMat(seq, pickleOrCsv='pickle', savename='PhylDistMat'):
+def phylDistMat(seq, savename='PhylDistMat'):
     svnames = list(seq.index)
     df = pd.DataFrame(0, index=svnames, columns=svnames)
+
+    # For showing progress
+    total_comp = (len(svnames)**2)/2
+    rootPhylDistMat = tk.Tk()
+    calc_progress = tk.DoubleVar(rootPhylDistMat, 0)
+    counter = 0
+    tk.Label(rootPhylDistMat, text='Progress in calculation (%)', width=30).pack()
+    tk.Label(rootPhylDistMat, textvariable=calc_progress, width=20).pack()
+
     for i in range(len(svnames) - 1):
-        if i % 10 == 0:
-            print(i, ' out of ', len(svnames))
         for j in range(i + 1, len(svnames)):
+
+            # For showing progress
+            counter += 1
+            if counter%100 == 0:
+                calc_progress.set(round(100*counter/total_comp, 2))
+                rootPhylDistMat.update()
+
             n1 = svnames[i]
             n2 = svnames[j]
             s1 = seq.loc[n1, 'seq']
@@ -679,12 +733,9 @@ def phylDistMat(seq, pickleOrCsv='pickle', savename='PhylDistMat'):
                 dist = Lv.distance(s1, s2) / maxlen
 
             df.loc[n1, n2] = dist; df.loc[n2, n1] = dist
-    if pickleOrCsv == 'pickle':
-        with open(savename+'.pickle', 'wb') as handle:
-            pickle.dump(df, handle)
-    else:
-        df.to_csv(savename+'.csv')
-    print('Finished printing Phyldistmat as pickle or csv file')
+    df.to_csv(savename+'.csv')
+    calc_progress.set(100)
+    rootPhylDistMat.update()
 
 # Returns Rao's quadratic entropy, sum(sum(dij*pi*pj))
 # Function used in Chiu's phylogenetic diversity functions
@@ -844,9 +895,9 @@ def phylDivAlpha(tab, distmat, q=0, rarefy='None'):
         ra = tab / tab.sum()
 
     outdf = pd.Series(0, index=ra.columns)
-    svlist = list(ra.index)
+    svlist = ra.index.tolist()
     distmat = distmat.loc[svlist, svlist]
-    Qframe = raoQ(tab, distmat)
+    Qframe = raoQ(ra, distmat)
     if q == 0:
         for smp in tab.columns:
             ra2mat = pd.DataFrame(np.outer(ra.loc[:, smp].values, ra.loc[:, smp].values), index=ra.index,
@@ -892,9 +943,23 @@ def phylDivBeta(tab, distmat, q=1, rarefy='None', dis=True):
     smplist = list(ra.columns)
     outD = pd.DataFrame(0, index=smplist, columns=smplist)
 
+    # For showing progress
+    total_comp = (len(smplist)**2)/2
+    rootPhylDivBeta = tk.Tk()
+    calc_progress = tk.DoubleVar(rootPhylDivBeta, 0)
+    counter = 0
+    tk.Label(rootPhylDivBeta, text='Progress in calculation (%)', width=30).pack()
+    tk.Label(rootPhylDivBeta, textvariable=calc_progress, width=20).pack()
+
     for smp1nr in range(len(smplist) - 1):
-        print('Running ', smp1nr, ' out of ', len(smplist))
         for smp2nr in range(smp1nr + 1, len(smplist)):
+
+            # For showing progress
+            counter += 1
+            if counter%10 == 0:
+                calc_progress.set(round(100*counter/total_comp, 2))
+                rootPhylDivBeta.update()
+
             smp1 = smplist[smp1nr]
             smp2 = smplist[smp2nr]
 
@@ -940,7 +1005,7 @@ def phylDivBeta(tab, distmat, q=1, rarefy='None', dis=True):
                 Da = 0.5 * pow((asum1 + asum2 + 2 * asum12), 1 / (2 * (1 - q)))
 
                 # Calculate beta
-                outD.loc[smp1, smp2] = Dg / Da;
+                outD.loc[smp1, smp2] = Dg / Da
                 outD.loc[smp2, smp1] = Dg / Da
 
             else:
@@ -983,6 +1048,9 @@ def phylDivBeta(tab, distmat, q=1, rarefy='None', dis=True):
                 outD.loc[smp2, smp1] = Dg / Da
     outFD = outD.pow(2)
 
+    calc_progress.set(100)
+    rootPhylDivBeta.update()
+
     if dis:
         return beta2Dist(beta=outFD, q=q, divType='phyl')
     else:
@@ -1009,16 +1077,13 @@ def plotDivAlpha(obj, distmat='None', rarefy='min', var='None', slist='All', ord
         smplist = meta.loc[slist, var].index.tolist()
 
     #Dataframe for holding results
-    xvalues = np.arange(0, 2.01, 0.02)
+    xvalues = np.arange(0, 2.01, 0.05)
     df = pd.DataFrame(0, index=xvalues, columns=smplist)
 
     #Put data in dataframe
     tab = obj['tab'][smplist]
     for x in xvalues:
-        timeprogress = int(100*x/xvalues[-1])
-        if timeprogress%10 == 0:
-            print(timeprogress,'% complete')
-        if distmat == 'None':
+        if isinstance(distmat, str):
             alphadiv = naiveDivAlpha(tab, q=x, rarefy=rarefy)
         else:
             alphadiv = phylDivAlpha(tab, distmat, q=x, rarefy=rarefy)
@@ -1062,6 +1127,7 @@ def plotDivAlpha(obj, distmat='None', rarefy='min', var='None', slist='All', ord
     plt.legend()
     plt.tight_layout()
     if savename != 'None':
+        plt.savefig(savename+'.pdf', format='pdf')
         plt.savefig(savename)
     plt.show()
 
@@ -1199,5 +1265,6 @@ def plotPCoA(dist, meta, var1='None', var2='None', tag='None', order='None', tit
     plt.title(title)
     plt.tight_layout(rect=[0, 0, 0.85, 1])
     if savename != 'None':
+        plt.savefig(savename+'.pdf', format='pdf')
         plt.savefig(savename)
     plt.show()
